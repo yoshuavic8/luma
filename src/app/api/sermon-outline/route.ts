@@ -106,7 +106,7 @@ function streamMistralResponse(response: Response, options?: any) {
               } catch (e) {
                 console.error('Error parsing stream data:', e)
               }
-            } else if (line === 'data: [DONE]') {
+            } else if (line === 'data: [DONE]' || line.includes('"finish_reason"')) {
               // Stream selesai, kirim data terakhir jika ada
               if (jsonBuffer.hasOwnProperty('content') && jsonBuffer.content.trim()) {
                 try {

@@ -23,6 +23,10 @@ export interface SermonOutline {
   }
   createdAt?: string
   updatedAt?: string
+  // Metadata untuk streaming
+  _mistralDone?: boolean
+  _completed?: boolean
+  _timestamp?: string
 }
 
 export interface SermonGenerationOptions {
@@ -101,6 +105,13 @@ export async function generateSermonOutline(
                   continue // Skip ke chunk berikutnya
                 }
 
+                // Cek apakah ini adalah pesan [DONE] dari Mistral
+                if (data.finish_reason === 'stop' || data.finish_reason === 'length') {
+                  console.log('Mistral finish signal received:', data.finish_reason)
+                  // Tambahkan flag untuk menandai bahwa ini adalah chunk terakhir dari Mistral
+                  data._mistralDone = true
+                }
+
                 // Log timestamp jika ada untuk debugging
                 if (data._timestamp) {
                   console.log('Chunk received at:', data._timestamp)
@@ -136,6 +147,13 @@ export async function generateSermonOutline(
                 // Cek apakah ini adalah chunk terakhir
                 if (data._completed) {
                   console.log('Final chunk received, outline should be complete')
+                }
+
+                // Cek apakah ini adalah pesan terakhir dari Mistral
+                if (data._mistralDone) {
+                  console.log('Mistral has finished generating content')
+                  // Tandai bahwa Mistral telah selesai
+                  outline._mistralDone = true
                 }
               } catch (e) {
                 console.error('Error parsing JSON chunk:', e, 'Line:', line)
@@ -238,8 +256,18 @@ export async function generateSermonOutline(
         }
 
         // Tambahkan delay kecil untuk memastikan UI sudah siap
-        await new Promise(resolve => setTimeout(resolve, 500))
-        console.log('Streaming selesai, outline lengkap:', outline.title)
+        await new Promise(resolve => setTimeout(resolve, 1000))
+
+        // Log detail outline untuk debugging
+        console.log('Streaming selesai, outline lengkap:', {
+          title: outline.title,
+          introLength: outline.introduction?.length || 0,
+          pointsCount: outline.mainPoints?.length || 0,
+          conclusionLength: outline.conclusion?.length || 0,
+          mistralDone: outline._mistralDone || false,
+          completed: outline._completed || false
+        })
+
         return outline
       } catch (streamError) {
         console.error('Error reading stream:', streamError)

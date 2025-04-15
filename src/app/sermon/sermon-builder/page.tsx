@@ -115,7 +115,7 @@ export default function SermonBuilderPage() {
       try {
         // Tambahkan timeout yang lebih panjang untuk streaming
         const timeoutPromise = new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('Generation timeout after 2 minutes')), 120000)
+          setTimeout(() => reject(new Error('Generation timeout after 3 minutes')), 180000)
         })
 
         // Race antara generasi outline dan timeout
@@ -123,6 +123,9 @@ export default function SermonBuilderPage() {
           generateSermonOutline(options),
           timeoutPromise
         ])) as SermonOutline
+
+        // Tambahkan delay untuk memastikan semua data telah diterima
+        await new Promise(resolve => setTimeout(resolve, 1000))
 
         // Verifikasi kelengkapan outline
         if (outline && outline.title && outline.introduction && outline.mainPoints.length > 0) {
