@@ -1,11 +1,6 @@
 import { NextResponse } from 'next/server'
-import * as Sentry from '@sentry/nextjs'
-import { monitoring } from '@/lib/monitoring'
 
 export async function POST(request: Request) {
-  const startTime = performance.now()
-  monitoring.log('info', 'Sermon outline generation started')
-
   try {
     const { options, userData } = await request.json()
 
@@ -114,7 +109,7 @@ export async function POST(request: Request) {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 50000) // 50 detik timeout
 
-      monitoring.log('info', 'Sending request to Mistral API', { model: 'mistral-small-latest' })
+      console.log('Sending request to Mistral API...')
 
       // Gunakan model yang lebih kecil dan lebih cepat
       const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
@@ -146,13 +141,8 @@ export async function POST(request: Request) {
       // Clear timeout jika request berhasil
       clearTimeout(timeoutId)
 
-      // Log respons status untuk monitoring
-      monitoring.trackApiResponse(
-        'https://api.mistral.ai/v1/chat/completions',
-        'POST',
-        response.status,
-        startTime
-      )
+      // Log respons status untuk debugging
+      console.log(`Mistral API response status: ${response.status}`)
 
       // Jika respons tidak OK, tangani error
       if (!response.ok) {
@@ -164,7 +154,7 @@ export async function POST(request: Request) {
       }
 
       const completion = await response.json()
-      monitoring.log('info', 'Received response from Mistral API')
+      console.log('Received response from Mistral API')
 
       // Validasi respons dengan lebih ketat
       if (
@@ -178,8 +168,7 @@ export async function POST(request: Request) {
         !completion.choices[0].message.content ||
         typeof completion.choices[0].message.content !== 'string'
       ) {
-        const errorMsg = 'Invalid API response format'
-        monitoring.trackError(new Error(errorMsg), { completion })
+        console.error('Invalid API response format:', completion)
         return NextResponse.json(
           {
             error: 'Invalid API response format',
@@ -190,10 +179,8 @@ export async function POST(request: Request) {
       }
 
       let outlineText = completion.choices[0].message.content
-      monitoring.log('info', 'Content received', {
-        length: outlineText.length,
-        preview: outlineText.substring(0, 100) + '...'
-      })
+      console.log('Content length:', outlineText.length)
+      console.log('Content preview:', outlineText.substring(0, 100) + '...')
 
       // Bersihkan respons dari backticks dan penanda json jika ada
       if (outlineText.startsWith('```')) {
@@ -206,15 +193,12 @@ export async function POST(request: Request) {
       try {
         // Validasi bahwa teks adalah JSON yang valid
         if (!outlineText.trim().startsWith('{') || !outlineText.trim().endsWith('}')) {
-          const errorMsg = 'Response is not valid JSON'
-          monitoring.trackError(new Error(errorMsg), {
-            preview: outlineText.substring(0, 100) + '...'
-          })
+          console.error('Response is not valid JSON:', outlineText.substring(0, 100) + '...')
           throw new Error('Response is not valid JSON')
         }
 
         const outline = JSON.parse(outlineText)
-        monitoring.log('info', 'Successfully parsed JSON response')
+        console.log('Successfully parsed JSON response')
 
         // Validasi struktur outline
         if (
@@ -223,16 +207,13 @@ export async function POST(request: Request) {
           !outline.introduction ||
           !Array.isArray(outline.mainPoints)
         ) {
-          const errorMsg = 'Missing required fields in outline'
-          monitoring.trackError(new Error(errorMsg), { fields: Object.keys(outline) })
+          console.error('Missing required fields in outline:', Object.keys(outline))
           throw new Error('Missing required fields in outline')
         }
 
         return NextResponse.json(outline)
       } catch (parseError) {
-        monitoring.trackError(
-          parseError instanceof Error ? parseError : new Error('Error parsing JSON')
-        )
+        console.error('Error parsing JSON:', parseError)
 
         // Coba lagi dengan pendekatan lain jika masih gagal
         try {
@@ -244,14 +225,10 @@ export async function POST(request: Request) {
           }
 
           const outline = JSON.parse(cleanedText)
-          monitoring.log('info', 'Successfully parsed JSON after cleaning')
+          console.log('Successfully parsed JSON after cleaning')
           return NextResponse.json(outline)
         } catch (cleanError) {
-          monitoring.trackError(
-            cleanError instanceof Error
-              ? cleanError
-              : new Error('Failed to parse even after cleaning')
-          )
+          console.error('Failed to parse even after cleaning:', cleanError)
 
           // Jika masih gagal, coba buat outline minimal
           try {
@@ -286,10 +263,7 @@ export async function POST(request: Request) {
         }
       }
     } catch (error: unknown) {
-      monitoring.trackError(
-        error instanceof Error ? error : new Error('Unknown error in sermon-outline API route')
-      )
-      Sentry.captureException(error)
+      console.error('Error in sermon-outline API route:', error)
 
       // Handle AbortError (timeout)
       if (error instanceof DOMException && error.name === 'AbortError') {
@@ -325,10 +299,5 @@ export async function POST(request: Request) {
       },
       { status: 500 }
     )
-  } finally {
-    // Log performa total jika berhasil
-    monitoring.log('info', 'Sermon outline generation completed', {
-      duration: `${(performance.now() - startTime).toFixed(2)}ms`
-    })
   }
 }

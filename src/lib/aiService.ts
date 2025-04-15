@@ -36,25 +36,17 @@ export interface SermonGenerationOptions {
 
 export interface EnhanceOptions {
   section: 'introduction' | 'point' | 'illustration' | 'conclusion' | 'structure'
-  content: Record<string, unknown>
+  content: any
 }
-
-import { monitoring } from './monitoring'
-import * as Sentry from '@sentry/nextjs'
 
 export async function generateSermonOutline(
   options: SermonGenerationOptions
 ): Promise<SermonOutline> {
-  const startTime = performance.now()
-  monitoring.log('info', 'Generating sermon outline', { options })
-
   try {
     // Menggunakan API route yang sudah ada untuk Mistral API
+    // Removed console statement
 
-    // Kirim permintaan ke API route dengan timeout
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 60000) // 60 detik timeout
-
+    // Kirim permintaan ke API route
     const response = await fetch('/api/sermon-outline', {
       method: 'POST',
       headers: {
@@ -63,12 +55,8 @@ export async function generateSermonOutline(
       body: JSON.stringify({
         options,
         userData: { uid: 'client-side' } // Minimal userData untuk API route
-      }),
-      signal: controller.signal
+      })
     })
-
-    // Clear timeout jika request berhasil
-    clearTimeout(timeoutId)
 
     if (!response.ok) {
       const errorData = await response.json()
@@ -95,7 +83,7 @@ export async function generateSermonOutline(
       hook: data.hook || '',
       introduction: data.introduction || '',
       mainPoints: Array.isArray(data.mainPoints)
-        ? data.mainPoints.map((point: Record<string, unknown>) => ({
+        ? data.mainPoints.map((point: any) => ({
             title: point?.title || 'Untitled Point',
             scripture: point?.scripture || '',
             explanation: point?.explanation || ''
@@ -108,7 +96,7 @@ export async function generateSermonOutline(
             typeof data.applicationPoints[0] === 'string'
             ? data.applicationPoints
             : // Handle array of objects with 'point' property
-              data.applicationPoints.map((p: Record<string, unknown> | string) =>
+              data.applicationPoints.map((p: any) =>
                 p && typeof p === 'object' ? p.point || p.toString() : 'Application point'
               )
           : []
@@ -131,45 +119,14 @@ export async function generateSermonOutline(
         })
     }
 
-    // Track successful AI performance
-    monitoring.trackAiPerformance(
-      'sermon-outline',
-      JSON.stringify(options).substring(0, 100),
-      startTime,
-      true
-    )
-
     return outline
   } catch (error) {
-    monitoring.trackError(
-      error instanceof Error ? error : new Error('Error in generateSermonOutline')
-    )
-    Sentry.captureException(error)
-
-    // Handle AbortError (timeout)
-    if (error instanceof DOMException && error.name === 'AbortError') {
-      monitoring.log('error', 'Request timed out after 60 seconds', { options })
-      throw new Error(
-        'Request timed out after 60 seconds. Please try again with a simpler request.'
-      )
-    }
-
-    // Track AI performance failure
-    monitoring.trackAiPerformance(
-      'sermon-outline',
-      JSON.stringify(options).substring(0, 100),
-      startTime,
-      false
-    )
-
-    // Throw with better error message
+    // Removed console statement
     throw new Error(error instanceof Error ? error.message : 'Failed to generate sermon outline')
   }
 }
 
-export async function enhanceSermonContent(
-  options: EnhanceOptions
-): Promise<Record<string, unknown>> {
+export async function enhanceSermonContent(options: EnhanceOptions): Promise<any> {
   try {
     // Kirim permintaan ke API route
     const response = await fetch('/api/sermon-enhance', {

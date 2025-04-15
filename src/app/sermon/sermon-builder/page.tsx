@@ -1,8 +1,6 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
-import * as Sentry from '@sentry/nextjs'
-import { monitoring } from '@/lib/monitoring'
 import jsPDF from 'jspdf'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -63,14 +61,6 @@ export default function SermonBuilderPage() {
     setIsGenerating(true)
     setError('')
 
-    monitoring.log('info', 'User initiated sermon generation', {
-      topic,
-      scripture,
-      audience,
-      style,
-      length
-    })
-
     try {
       // Generate sermon outline
       const options: SermonGenerationOptions = {
@@ -82,40 +72,15 @@ export default function SermonBuilderPage() {
         includeApplicationPoints
       }
 
-      monitoring.log('info', 'Calling generateSermonOutline', { options })
+      console.log('Generating sermon outline with options:', options)
       const outline = await generateSermonOutline(options)
-      monitoring.log('info', 'Sermon outline generated successfully')
+      console.log('Sermon outline generated successfully')
       setGeneratedOutline(outline)
-
-      // Track successful generation
-      Sentry.addBreadcrumb({
-        category: 'sermon',
-        message: 'Sermon outline generated successfully',
-        level: 'info'
-      })
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error)
-      monitoring.trackError(error instanceof Error ? error : new Error(errorMessage), {
-        topic,
-        scripture,
-        audience,
-        style,
-        length
-      })
+      console.error('Error generating sermon outline:', error)
 
-      // Send error to Sentry
-      Sentry.captureException(error, {
-        tags: {
-          feature: 'sermon_generation',
-          style,
-          audience
-        },
-        extra: {
-          topic,
-          scripture,
-          length
-        }
-      })
+      // Pesan error yang lebih user-friendly berdasarkan jenis error
+      const errorMessage = error instanceof Error ? error.message : String(error)
 
       // Pesan error yang lebih user-friendly berdasarkan jenis error
       if (errorMessage.includes('504') || errorMessage.includes('timeout')) {
