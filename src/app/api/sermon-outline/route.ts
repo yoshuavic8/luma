@@ -1,21 +1,24 @@
 import { NextResponse } from 'next/server'
 
-// Deklarasi global state untuk menyimpan data antar chunk
-declare global {
-  var lastSentData: Record<string, any> | null
-}
+// Konfigurasi untuk Edge Function
+export const runtime = 'edge' // Menandai ini sebagai Edge Function
 
-// Inisialisasi global state jika belum ada
-if (typeof global.lastSentData === 'undefined') {
-  global.lastSentData = null
-}
+// Deklarasi state untuk menyimpan data antar chunk
+// Catatan: Tidak bisa menggunakan global state di Edge Function
+// Kita akan menggunakan closure untuk menyimpan state
 
 // Fungsi untuk streaming response dari Mistral AI
 function streamMistralResponse(response: Response, options?: any) {
   const reader = response.body!.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
-  let jsonBuffer = {}
+  let jsonBuffer = { content: '' }
+  // Gunakan closure untuk menyimpan state
+  let lastSentData: Record<string, any> = { topic: options?.topic || '' }
+  // Tambahkan flag untuk melacak apakah kita sudah mendapatkan respons lengkap
+  let hasReceivedCompleteResponse = false
+  // Tambahkan variabel untuk menyimpan respons lengkap
+  let completeResponseJson: Record<string, any> | null = null
 
   return new ReadableStream({
     async start(controller) {
@@ -39,35 +42,54 @@ function streamMistralResponse(response: Response, options?: any) {
                 if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
                   const content = data.choices[0].delta.content
 
-                  // Coba parse sebagai JSON jika content berisi karakter JSON
-                  if (content.includes('{') || content.includes('}')) {
-                    try {
-                      // Update jsonBuffer dengan content baru
-                      if (!jsonBuffer.hasOwnProperty('content')) {
-                        jsonBuffer = { content: '' }
-                      }
-                      jsonBuffer.content += content
+                  // Log untuk debugging
+                  console.log(
+                    'Received content chunk:',
+                    content.substring(0, 50) + (content.length > 50 ? '...' : '')
+                  )
 
-                      // Coba parse jsonBuffer.content sebagai JSON
-                      if (
-                        jsonBuffer.content.trim().startsWith('{') &&
-                        jsonBuffer.content.trim().endsWith('}')
-                      ) {
+                  // Selalu akumulasi konten ke jsonBuffer
+                  if (!jsonBuffer.hasOwnProperty('content')) {
+                    jsonBuffer = { content: '' }
+                  }
+                  jsonBuffer.content += content
+
+                  // Coba parse sebagai JSON jika content berisi karakter JSON
+                  if (jsonBuffer.content.includes('{') && jsonBuffer.content.includes('}')) {
+                    try {
+                      // Cari tanda kurung kurawal pembuka dan penutup terluar
+                      const content = jsonBuffer.content.trim()
+                      const firstBrace = content.indexOf('{')
+                      const lastBrace = content.lastIndexOf('}')
+
+                      if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+                        // Ekstrak JSON potensial
+                        const potentialJson = content.substring(firstBrace, lastBrace + 1)
+                        console.log(
+                          'Attempting to parse JSON:',
+                          potentialJson.substring(0, 50) + '...'
+                        )
+
                         try {
-                          const parsedJson = JSON.parse(jsonBuffer.content)
+                          const parsedJson = JSON.parse(potentialJson)
                           // Jika berhasil di-parse, kirim ke client
                           // Verifikasi bahwa parsedJson memiliki struktur yang benar
                           if (parsedJson && typeof parsedJson === 'object') {
+                            // Simpan respons lengkap
+                            completeResponseJson = parsedJson
+                            hasReceivedCompleteResponse = true
+
                             // Tambahkan timestamp dan metadata untuk debugging
                             const enhancedJson = {
                               ...parsedJson,
                               _timestamp: new Date().toISOString(),
-                              _chunkId: Math.random().toString(36).substring(2, 9)
+                              _chunkId: Math.random().toString(36).substring(2, 9),
+                              _isComplete: true
                             }
 
                             // Log untuk debugging
                             console.log(
-                              `Sending chunk ${enhancedJson._chunkId} with keys:`,
+                              `Successfully parsed complete JSON with keys:`,
                               Object.keys(parsedJson)
                             )
 
@@ -77,12 +99,9 @@ function streamMistralResponse(response: Response, options?: any) {
                             )
 
                             // Simpan data yang sudah dikirim untuk digunakan di akhir stream
-                            if (!global.lastSentData) {
-                              global.lastSentData = {}
-                            }
-                            global.lastSentData = { ...global.lastSentData, ...parsedJson }
+                            lastSentData = { ...lastSentData, ...parsedJson }
 
-                            jsonBuffer = {} // Reset buffer
+                            jsonBuffer = { content: '' } // Reset buffer dengan properti content
                           } else {
                             console.warn('Parsed JSON tidak valid:', parsedJson)
                           }
@@ -108,25 +127,55 @@ function streamMistralResponse(response: Response, options?: any) {
               }
             } else if (line === 'data: [DONE]' || line.includes('"finish_reason"')) {
               // Stream selesai, kirim data terakhir jika ada
-              if (jsonBuffer.hasOwnProperty('content') && jsonBuffer.content.trim()) {
+              console.log('Received stream end signal')
+
+              // Jika kita sudah memiliki respons lengkap, gunakan itu
+              if (hasReceivedCompleteResponse && completeResponseJson) {
+                console.log('Using complete response JSON that was already parsed')
+                const finalJson = {
+                  ...completeResponseJson,
+                  _completed: true,
+                  _timestamp: new Date().toISOString(),
+                  _finalChunk: true
+                }
+
+                controller.enqueue(new TextEncoder().encode(JSON.stringify(finalJson) + '\n'))
+              }
+              // Jika tidak, coba parse buffer yang ada
+              else if (jsonBuffer.hasOwnProperty('content') && jsonBuffer.content.trim()) {
                 try {
-                  // Coba parse sebagai JSON
-                  const parsedJson = JSON.parse(jsonBuffer.content)
+                  // Coba ekstrak dan parse JSON dari buffer
+                  const content = jsonBuffer.content.trim()
+                  const firstBrace = content.indexOf('{')
+                  const lastBrace = content.lastIndexOf('}')
+
+                  let parsedJson
+                  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+                    const potentialJson = content.substring(firstBrace, lastBrace + 1)
+                    console.log(
+                      'Attempting to parse final JSON:',
+                      potentialJson.substring(0, 50) + '...'
+                    )
+                    parsedJson = JSON.parse(potentialJson)
+                  } else {
+                    // Fallback jika tidak dapat menemukan JSON yang valid
+                    throw new Error('Could not extract valid JSON from buffer')
+                  }
 
                   // Verifikasi bahwa parsedJson memiliki struktur yang benar
                   if (parsedJson && typeof parsedJson === 'object') {
                     // Gabungkan dengan data yang sudah dikirim sebelumnya
                     let completeData = parsedJson
-                    if (global.lastSentData) {
-                      completeData = { ...global.lastSentData, ...parsedJson }
+                    if (Object.keys(lastSentData).length > 0) {
+                      completeData = { ...lastSentData, ...parsedJson }
                     }
 
                     // Pastikan semua field yang diperlukan ada
                     if (!completeData.title) {
                       if (options?.topic) {
                         completeData.title = options.topic
-                      } else if (global.lastSentData?.topic) {
-                        completeData.title = global.lastSentData.topic
+                      } else if (lastSentData?.topic) {
+                        completeData.title = lastSentData.topic
                       } else {
                         completeData.title = 'Outline Khotbah'
                       }
@@ -178,8 +227,8 @@ function streamMistralResponse(response: Response, options?: any) {
                       )
                     )
 
-                    // Reset global state
-                    global.lastSentData = null
+                    // Reset state
+                    lastSentData = {}
                   } else {
                     // Bukan JSON valid, kirim sebagai teks biasa dengan flag completed
                     controller.enqueue(
@@ -317,45 +366,59 @@ export async function POST(request: Request) {
       "title": "Judul Khotbah",
       "scripture": "Referensi Ayat Utama",
       "hook": "Hook/kait emosional untuk menarik perhatian di awal khotbah",
-      "introduction": "Paragraf pendahuluan singkat",
+      "introduction": "Paragraf pendahuluan singkat (minimal 100 karakter)",
       "mainPoints": [
         {
           "title": "Judul Poin 1",
           "scripture": "Ayat Pendukung",
-          "explanation": "Penjelasan poin ini",
-          "illustration": "Ilustrasi, quote tokoh, atau kisah nyata yang memperkuat poin ini"
+          "explanation": "Penjelasan poin ini (minimal 150 karakter)"
         },
-        // Poin-poin lainnya...
+        {
+          "title": "Judul Poin 2",
+          "scripture": "Ayat Pendukung",
+          "explanation": "Penjelasan poin ini (minimal 150 karakter)"
+        },
+        {
+          "title": "Judul Poin 3",
+          "scripture": "Ayat Pendukung",
+          "explanation": "Penjelasan poin ini (minimal 150 karakter)"
+        }
       ],
       "biblicalSolution": {
-        "explanation": "Penjelasan solusi berdasarkan prinsip Alkitab",
-        "illustration": "Ilustrasi, quote tokoh, atau kisah nyata yang memperkuat solusi"
+        "explanation": "Penjelasan solusi berdasarkan prinsip Alkitab (minimal 100 karakter)",
+        "illustration": "Ilustrasi singkat yang mendukung solusi"
       },
-      "conclusion": "Paragraf kesimpulan singkat",
+      "conclusion": "Paragraf kesimpulan singkat (minimal 100 karakter)",
       "applicationPoints": [
-        {
-          "point": "Poin aplikasi 1",
-          "illustration": "Ilustrasi singkat atau contoh praktis untuk poin aplikasi ini"
-        },
-        // Poin aplikasi lainnya...
+        "Poin aplikasi 1 (minimal 50 karakter)",
+        "Poin aplikasi 2 (minimal 50 karakter)",
+        "Poin aplikasi 3 (minimal 50 karakter)"
       ],
       "personalChallenge": {
-        "challenge": "Tantangan personal spesifik untuk audiens",
-        "illustration": "Ilustrasi atau contoh inspiratif yang mendukung tantangan"
+        "challenge": "Tantangan personal spesifik untuk audiens (minimal 80 karakter)",
+        "illustration": "Ilustrasi singkat yang mendukung tantangan"
       }
     }
 
-    PENTING: Kembalikan HANYA objek JSON tanpa format markdown, blok kode, atau backticks. Respons harus berupa JSON valid yang dapat langsung di-parse. Berikan respons dalam Bahasa Indonesia.
+    INSTRUKSI PENTING:
+    1. Kembalikan HANYA objek JSON tanpa format markdown, blok kode, atau backticks.
+    2. Respons harus berupa JSON valid yang dapat langsung di-parse.
+    3. Berikan respons dalam Bahasa Indonesia.
+    4. Pastikan semua bagian terisi dengan konten yang bermakna dan memenuhi panjang minimal.
+    5. Jangan gunakan "N/A" atau placeholder dalam respons Anda.
+    6. Jika topik atau ayat Alkitab tidak disediakan, pilih yang sesuai berdasarkan pengalaman Anda.
+    7. Pastikan mainPoints selalu berisi minimal 3 poin lengkap.
+    8. Pastikan applicationPoints selalu berisi minimal 3 poin aplikasi.
+    9. Pastikan semua teks memiliki panjang yang cukup sesuai ketentuan minimal.
+    10. Jangan tambahkan komentar atau penjelasan di luar struktur JSON.
 
-    CATATAN: Jangan gunakan "N/A" dalam respons Anda. Jika topik atau ayat Alkitab tidak disediakan, silakan pilih yang sesuai berdasarkan pengalaman Anda.
+    PANDUAN KONTEN:
+    - Introduction: Berikan konteks yang jelas tentang topik dan ayat, minimal 100 karakter.
+    - Main Points: Setiap poin harus memiliki penjelasan yang substantif, minimal 150 karakter.
+    - Conclusion: Rangkum poin-poin utama dengan jelas, minimal 100 karakter.
+    - Application Points: Berikan aplikasi praktis yang spesifik, minimal 50 karakter per poin.
 
-    PANDUAN ILUSTRASI: Pastikan setiap ilustrasi relevan dengan poin yang dijelaskan dan dapat berupa:
-    1. Kisah nyata dari tokoh Alkitab atau sejarah
-    2. Kutipan inspiratif dari tokoh terkenal
-    3. Analogi atau perumpamaan yang mudah dipahami
-    4. Contoh kehidupan sehari-hari yang relatable
-
-    Buatlah ilustrasi yang singkat namun bermakna, dan pastikan ilustrasi tersebut memperkuat poin yang ingin disampaikan.`
+    Pastikan semua bagian terisi dengan konten yang bermakna dan substantif.`
 
     try {
       // Removed console statement
@@ -363,7 +426,8 @@ export async function POST(request: Request) {
       // Menggunakan fetch API untuk memanggil Mistral API secara langsung
       // Set timeout untuk fetch request
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 50000) // 50 detik timeout
+      // Kurangi timeout untuk Edge Function agar tidak melebihi batas Vercel
+      const timeoutId = setTimeout(() => controller.abort(), 25000) // 25 detik timeout
 
       console.log('Sending request to Mistral API...')
 
@@ -375,7 +439,7 @@ export async function POST(request: Request) {
           Authorization: `Bearer ${apiKey.trim()}`
         },
         body: JSON.stringify({
-          model: 'mistral-small-latest', // Menggunakan model yang lebih kecil untuk respons lebih cepat
+          model: 'mistral-small-latest', // Menggunakan model yang lebih seimbang antara kecepatan dan kualitas
           messages: [
             {
               role: 'system',
@@ -387,8 +451,8 @@ export async function POST(request: Request) {
               content: prompt
             }
           ],
-          temperature: 0.5, // Mengurangi temperature untuk respons yang lebih deterministik
-          max_tokens: 1500, // Mengurangi max_tokens untuk mengurangi waktu respons
+          temperature: 0.4, // Nilai temperature yang seimbang
+          max_tokens: 1500, // Cukup token untuk respons lengkap
           response_format: { type: 'json_object' },
           stream: true // Aktifkan streaming untuk menghindari timeout
         }),
@@ -404,20 +468,22 @@ export async function POST(request: Request) {
         )
       }
 
-      // Simpan options untuk digunakan di akhir stream
-      global.lastSentData = { topic: options.topic || '' }
-
-      // Streaming response ke client
+      // Streaming response ke client - mulai streaming segera
       const stream = streamMistralResponse(response, options)
+
+      // Kirim respons streaming segera untuk menghindari timeout
       return new Response(stream, {
         headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache',
-          Connection: 'keep-alive'
+          Connection: 'keep-alive',
+          'X-Content-Type-Options': 'nosniff',
+          'Transfer-Encoding': 'chunked'
         }
       })
 
-      // Clear timeout jika request berhasil
+      // Catatan: Kode di bawah ini tidak akan dieksekusi karena kita sudah mengembalikan respons
+      // Tapi kita tetap membersihkan timeout untuk keamanan
       clearTimeout(timeoutId)
     } catch (error: unknown) {
       console.error('Error in sermon-outline API route:', error)
@@ -426,7 +492,7 @@ export async function POST(request: Request) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         return NextResponse.json(
           {
-            error: 'Request to Mistral API timed out after 50 seconds',
+            error: 'Request to Mistral API timed out after 25 seconds',
             details:
               'The AI service took too long to respond. Please try again with a simpler request.'
           },
