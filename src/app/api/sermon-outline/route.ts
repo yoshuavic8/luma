@@ -1,7 +1,17 @@
 import { NextResponse } from 'next/server'
 
+// Deklarasi global state untuk menyimpan data antar chunk
+declare global {
+  var lastSentData: Record<string, any> | null
+}
+
+// Inisialisasi global state jika belum ada
+if (typeof global.lastSentData === 'undefined') {
+  global.lastSentData = null
+}
+
 // Fungsi untuk streaming response dari Mistral AI
-function streamMistralResponse(response: Response) {
+function streamMistralResponse(response: Response, options?: any) {
   const reader = response.body!.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -48,14 +58,30 @@ function streamMistralResponse(response: Response) {
                           // Jika berhasil di-parse, kirim ke client
                           // Verifikasi bahwa parsedJson memiliki struktur yang benar
                           if (parsedJson && typeof parsedJson === 'object') {
-                            // Tambahkan timestamp untuk debugging
+                            // Tambahkan timestamp dan metadata untuk debugging
                             const enhancedJson = {
                               ...parsedJson,
-                              _timestamp: new Date().toISOString()
+                              _timestamp: new Date().toISOString(),
+                              _chunkId: Math.random().toString(36).substring(2, 9)
                             }
+
+                            // Log untuk debugging
+                            console.log(
+                              `Sending chunk ${enhancedJson._chunkId} with keys:`,
+                              Object.keys(parsedJson)
+                            )
+
+                            // Kirim ke client
                             controller.enqueue(
                               new TextEncoder().encode(JSON.stringify(enhancedJson) + '\n')
                             )
+
+                            // Simpan data yang sudah dikirim untuk digunakan di akhir stream
+                            if (!global.lastSentData) {
+                              global.lastSentData = {}
+                            }
+                            global.lastSentData = { ...global.lastSentData, ...parsedJson }
+
                             jsonBuffer = {} // Reset buffer
                           } else {
                             console.warn('Parsed JSON tidak valid:', parsedJson)
@@ -89,12 +115,56 @@ function streamMistralResponse(response: Response) {
 
                   // Verifikasi bahwa parsedJson memiliki struktur yang benar
                   if (parsedJson && typeof parsedJson === 'object') {
+                    // Gabungkan dengan data yang sudah dikirim sebelumnya
+                    let completeData = parsedJson
+                    if (global.lastSentData) {
+                      completeData = { ...global.lastSentData, ...parsedJson }
+                    }
+
+                    // Pastikan semua field yang diperlukan ada
+                    if (!completeData.title) {
+                      if (options?.topic) {
+                        completeData.title = options.topic
+                      } else if (global.lastSentData?.topic) {
+                        completeData.title = global.lastSentData.topic
+                      } else {
+                        completeData.title = 'Outline Khotbah'
+                      }
+                    }
+
+                    if (!completeData.introduction) {
+                      completeData.introduction = 'Pendahuluan khotbah.'
+                    }
+
+                    if (
+                      !completeData.mainPoints ||
+                      !Array.isArray(completeData.mainPoints) ||
+                      completeData.mainPoints.length === 0
+                    ) {
+                      completeData.mainPoints = [
+                        {
+                          title: 'Poin 1',
+                          scripture: '',
+                          explanation: 'Penjelasan poin.'
+                        }
+                      ]
+                    }
+
+                    if (!completeData.conclusion) {
+                      completeData.conclusion = 'Kesimpulan khotbah.'
+                    }
+
                     // Tambahkan flag completed untuk menandai akhir stream
                     const finalJson = {
-                      ...parsedJson,
+                      ...completeData,
                       _completed: true,
-                      _timestamp: new Date().toISOString()
+                      _timestamp: new Date().toISOString(),
+                      _finalChunk: true
                     }
+
+                    // Log untuk debugging
+                    console.log('Sending final chunk with keys:', Object.keys(finalJson))
+
                     controller.enqueue(new TextEncoder().encode(JSON.stringify(finalJson) + '\n'))
 
                     // Kirim juga sinyal selesai terpisah untuk memastikan client tahu stream sudah selesai
@@ -102,10 +172,14 @@ function streamMistralResponse(response: Response) {
                       new TextEncoder().encode(
                         JSON.stringify({
                           _streamComplete: true,
-                          _timestamp: new Date().toISOString()
+                          _timestamp: new Date().toISOString(),
+                          _dataKeys: Object.keys(completeData)
                         }) + '\n'
                       )
                     )
+
+                    // Reset global state
+                    global.lastSentData = null
                   } else {
                     // Bukan JSON valid, kirim sebagai teks biasa dengan flag completed
                     controller.enqueue(
@@ -330,8 +404,11 @@ export async function POST(request: Request) {
         )
       }
 
+      // Simpan options untuk digunakan di akhir stream
+      global.lastSentData = { topic: options.topic || '' }
+
       // Streaming response ke client
-      const stream = streamMistralResponse(response)
+      const stream = streamMistralResponse(response, options)
       return new Response(stream, {
         headers: {
           'Content-Type': 'application/json',

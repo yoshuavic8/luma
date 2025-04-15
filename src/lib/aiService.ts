@@ -176,11 +176,24 @@ export async function generateSermonOutline(
         }
 
         // Verifikasi kelengkapan outline sebelum mengembalikan
-        if (
+        console.log('Verifikasi kelengkapan outline:', {
+          title: outline.title,
+          introLength: outline.introduction?.length || 0,
+          pointsCount: outline.mainPoints?.length || 0,
+          conclusionLength: outline.conclusion?.length || 0
+        })
+
+        // Cek apakah outline memiliki konten yang cukup
+        const isOutlineEmpty =
           outline.title === 'Loading...' ||
           !outline.introduction ||
-          outline.mainPoints.length === 0
-        ) {
+          outline.introduction.length < 10 ||
+          !outline.mainPoints ||
+          outline.mainPoints.length === 0 ||
+          !outline.conclusion ||
+          outline.conclusion.length < 10
+
+        if (isOutlineEmpty) {
           console.warn('Outline tidak lengkap setelah streaming selesai, mencoba fallback...')
 
           // Jika outline tidak lengkap, buat fallback minimal
@@ -188,22 +201,39 @@ export async function generateSermonOutline(
             outline.title = options.topic || 'Outline Khotbah'
           }
 
-          if (!outline.introduction) {
-            outline.introduction = 'Pendahuluan akan ditambahkan di sini.'
+          if (!outline.introduction || outline.introduction.length < 10) {
+            outline.introduction =
+              'Pendahuluan akan ditambahkan di sini. Silakan tambahkan pendahuluan Anda sendiri yang sesuai dengan topik khotbah.'
           }
 
-          if (outline.mainPoints.length === 0) {
+          if (!outline.mainPoints || outline.mainPoints.length === 0) {
             outline.mainPoints = [
               {
-                title: 'Poin 1',
+                title: 'Poin 1: ' + (options.topic || 'Tema Utama'),
                 scripture: '',
-                explanation: 'Silakan isi dengan konten Anda sendiri.'
+                explanation:
+                  'Silakan isi dengan konten Anda sendiri yang sesuai dengan topik khotbah.'
               }
             ]
+          } else {
+            // Pastikan setiap poin memiliki konten yang cukup
+            outline.mainPoints = outline.mainPoints.map(point => ({
+              title: point.title || 'Poin Khotbah',
+              scripture: point.scripture || '',
+              explanation:
+                point.explanation && point.explanation.length > 10
+                  ? point.explanation
+                  : 'Silakan isi dengan penjelasan yang sesuai dengan poin ini.'
+            }))
           }
 
-          if (!outline.conclusion) {
-            outline.conclusion = 'Kesimpulan akan ditambahkan di sini.'
+          if (!outline.conclusion || outline.conclusion.length < 10) {
+            outline.conclusion =
+              'Kesimpulan akan ditambahkan di sini. Silakan tambahkan kesimpulan Anda sendiri yang merangkum poin-poin utama khotbah.'
+          }
+
+          if (!outline.applicationPoints || outline.applicationPoints.length === 0) {
+            outline.applicationPoints = ['Aplikasi praktis akan ditambahkan di sini.']
           }
         }
 
