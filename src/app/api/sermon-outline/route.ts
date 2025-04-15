@@ -46,10 +46,20 @@ function streamMistralResponse(response: Response) {
                         try {
                           const parsedJson = JSON.parse(jsonBuffer.content)
                           // Jika berhasil di-parse, kirim ke client
-                          controller.enqueue(
-                            new TextEncoder().encode(JSON.stringify(parsedJson) + '\n')
-                          )
-                          jsonBuffer = {} // Reset buffer
+                          // Verifikasi bahwa parsedJson memiliki struktur yang benar
+                          if (parsedJson && typeof parsedJson === 'object') {
+                            // Tambahkan timestamp untuk debugging
+                            const enhancedJson = {
+                              ...parsedJson,
+                              _timestamp: new Date().toISOString()
+                            }
+                            controller.enqueue(
+                              new TextEncoder().encode(JSON.stringify(enhancedJson) + '\n')
+                            )
+                            jsonBuffer = {} // Reset buffer
+                          } else {
+                            console.warn('Parsed JSON tidak valid:', parsedJson)
+                          }
                         } catch (e) {
                           // JSON belum lengkap, lanjutkan buffering
                         }
@@ -76,13 +86,70 @@ function streamMistralResponse(response: Response) {
                 try {
                   // Coba parse sebagai JSON
                   const parsedJson = JSON.parse(jsonBuffer.content)
-                  controller.enqueue(new TextEncoder().encode(JSON.stringify(parsedJson) + '\n'))
+
+                  // Verifikasi bahwa parsedJson memiliki struktur yang benar
+                  if (parsedJson && typeof parsedJson === 'object') {
+                    // Tambahkan flag completed untuk menandai akhir stream
+                    const finalJson = {
+                      ...parsedJson,
+                      _completed: true,
+                      _timestamp: new Date().toISOString()
+                    }
+                    controller.enqueue(new TextEncoder().encode(JSON.stringify(finalJson) + '\n'))
+
+                    // Kirim juga sinyal selesai terpisah untuk memastikan client tahu stream sudah selesai
+                    controller.enqueue(
+                      new TextEncoder().encode(
+                        JSON.stringify({
+                          _streamComplete: true,
+                          _timestamp: new Date().toISOString()
+                        }) + '\n'
+                      )
+                    )
+                  } else {
+                    // Bukan JSON valid, kirim sebagai teks biasa dengan flag completed
+                    controller.enqueue(
+                      new TextEncoder().encode(
+                        JSON.stringify({
+                          text: jsonBuffer.content,
+                          _completed: true,
+                          _timestamp: new Date().toISOString()
+                        }) + '\n'
+                      )
+                    )
+                  }
                 } catch (e) {
-                  // Bukan JSON valid, kirim sebagai teks biasa
+                  // Bukan JSON valid, kirim sebagai teks biasa dengan flag completed
                   controller.enqueue(
-                    new TextEncoder().encode(JSON.stringify({ text: jsonBuffer.content }) + '\n')
+                    new TextEncoder().encode(
+                      JSON.stringify({
+                        text: jsonBuffer.content,
+                        _completed: true,
+                        _timestamp: new Date().toISOString()
+                      }) + '\n'
+                    )
+                  )
+
+                  // Kirim juga sinyal selesai terpisah
+                  controller.enqueue(
+                    new TextEncoder().encode(
+                      JSON.stringify({
+                        _streamComplete: true,
+                        _timestamp: new Date().toISOString()
+                      }) + '\n'
+                    )
                   )
                 }
+              } else {
+                // Tidak ada data di buffer, tapi tetap kirim sinyal selesai
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    JSON.stringify({
+                      _streamComplete: true,
+                      _timestamp: new Date().toISOString()
+                    }) + '\n'
+                  )
+                )
               }
             }
           }

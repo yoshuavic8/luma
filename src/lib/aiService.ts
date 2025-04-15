@@ -95,6 +95,17 @@ export async function generateSermonOutline(
               try {
                 const data = JSON.parse(line)
 
+                // Cek apakah ini adalah sinyal akhir stream
+                if (data._streamComplete) {
+                  console.log('Stream complete signal received at:', data._timestamp)
+                  continue // Skip ke chunk berikutnya
+                }
+
+                // Log timestamp jika ada untuk debugging
+                if (data._timestamp) {
+                  console.log('Chunk received at:', data._timestamp)
+                }
+
                 // Update outline dengan data yang diterima
                 if (data.title) outline.title = data.title
                 if (data.scripture) outline.scripture = data.scripture
@@ -121,8 +132,13 @@ export async function generateSermonOutline(
                 if (data.personalChallenge) {
                   outline.personalChallenge = data.personalChallenge
                 }
+
+                // Cek apakah ini adalah chunk terakhir
+                if (data._completed) {
+                  console.log('Final chunk received, outline should be complete')
+                }
               } catch (e) {
-                console.error('Error parsing JSON chunk:', e)
+                console.error('Error parsing JSON chunk:', e, 'Line:', line)
               }
             }
           }
@@ -159,6 +175,41 @@ export async function generateSermonOutline(
           }
         }
 
+        // Verifikasi kelengkapan outline sebelum mengembalikan
+        if (
+          outline.title === 'Loading...' ||
+          !outline.introduction ||
+          outline.mainPoints.length === 0
+        ) {
+          console.warn('Outline tidak lengkap setelah streaming selesai, mencoba fallback...')
+
+          // Jika outline tidak lengkap, buat fallback minimal
+          if (outline.title === 'Loading...') {
+            outline.title = options.topic || 'Outline Khotbah'
+          }
+
+          if (!outline.introduction) {
+            outline.introduction = 'Pendahuluan akan ditambahkan di sini.'
+          }
+
+          if (outline.mainPoints.length === 0) {
+            outline.mainPoints = [
+              {
+                title: 'Poin 1',
+                scripture: '',
+                explanation: 'Silakan isi dengan konten Anda sendiri.'
+              }
+            ]
+          }
+
+          if (!outline.conclusion) {
+            outline.conclusion = 'Kesimpulan akan ditambahkan di sini.'
+          }
+        }
+
+        // Tambahkan delay kecil untuk memastikan UI sudah siap
+        await new Promise(resolve => setTimeout(resolve, 500))
+        console.log('Streaming selesai, outline lengkap:', outline.title)
         return outline
       } catch (streamError) {
         console.error('Error reading stream:', streamError)
