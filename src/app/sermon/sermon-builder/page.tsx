@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import * as Sentry from '@sentry/nextjs'
+import { monitoring } from '@/lib/monitoring'
 import jsPDF from 'jspdf'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
@@ -61,6 +63,14 @@ export default function SermonBuilderPage() {
     setIsGenerating(true)
     setError('')
 
+    monitoring.log('info', 'User initiated sermon generation', {
+      topic,
+      scripture,
+      audience,
+      style,
+      length
+    })
+
     try {
       // Generate sermon outline
       const options: SermonGenerationOptions = {
@@ -72,16 +82,42 @@ export default function SermonBuilderPage() {
         includeApplicationPoints
       }
 
-      console.log('Generating sermon outline with options:', options)
+      monitoring.log('info', 'Calling generateSermonOutline', { options })
       const outline = await generateSermonOutline(options)
-      console.log('Sermon outline generated successfully')
+      monitoring.log('info', 'Sermon outline generated successfully')
       setGeneratedOutline(outline)
+
+      // Track successful generation
+      Sentry.addBreadcrumb({
+        category: 'sermon',
+        message: 'Sermon outline generated successfully',
+        level: 'info'
+      })
     } catch (error) {
-      console.error('Error generating sermon outline:', error)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      monitoring.trackError(error instanceof Error ? error : new Error(errorMessage), {
+        topic,
+        scripture,
+        audience,
+        style,
+        length
+      })
+
+      // Send error to Sentry
+      Sentry.captureException(error, {
+        tags: {
+          feature: 'sermon_generation',
+          style,
+          audience
+        },
+        extra: {
+          topic,
+          scripture,
+          length
+        }
+      })
 
       // Pesan error yang lebih user-friendly berdasarkan jenis error
-      const errorMessage = error instanceof Error ? error.message : String(error)
-
       if (errorMessage.includes('504') || errorMessage.includes('timeout')) {
         setError(
           'The AI service took too long to respond. Please try again with a simpler request or check your internet connection.'

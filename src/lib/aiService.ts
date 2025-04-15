@@ -36,15 +36,20 @@ export interface SermonGenerationOptions {
 
 export interface EnhanceOptions {
   section: 'introduction' | 'point' | 'illustration' | 'conclusion' | 'structure'
-  content: any
+  content: Record<string, unknown>
 }
+
+import { monitoring } from './monitoring'
+import * as Sentry from '@sentry/nextjs'
 
 export async function generateSermonOutline(
   options: SermonGenerationOptions
 ): Promise<SermonOutline> {
+  const startTime = performance.now()
+  monitoring.log('info', 'Generating sermon outline', { options })
+
   try {
     // Menggunakan API route yang sudah ada untuk Mistral API
-    // Removed console statement
 
     // Kirim permintaan ke API route dengan timeout
     const controller = new AbortController()
@@ -90,7 +95,7 @@ export async function generateSermonOutline(
       hook: data.hook || '',
       introduction: data.introduction || '',
       mainPoints: Array.isArray(data.mainPoints)
-        ? data.mainPoints.map((point: any) => ({
+        ? data.mainPoints.map((point: Record<string, unknown>) => ({
             title: point?.title || 'Untitled Point',
             scripture: point?.scripture || '',
             explanation: point?.explanation || ''
@@ -103,7 +108,7 @@ export async function generateSermonOutline(
             typeof data.applicationPoints[0] === 'string'
             ? data.applicationPoints
             : // Handle array of objects with 'point' property
-              data.applicationPoints.map((p: any) =>
+              data.applicationPoints.map((p: Record<string, unknown> | string) =>
                 p && typeof p === 'object' ? p.point || p.toString() : 'Application point'
               )
           : []
@@ -126,23 +131,45 @@ export async function generateSermonOutline(
         })
     }
 
+    // Track successful AI performance
+    monitoring.trackAiPerformance(
+      'sermon-outline',
+      JSON.stringify(options).substring(0, 100),
+      startTime,
+      true
+    )
+
     return outline
   } catch (error) {
-    console.error('Error in generateSermonOutline:', error)
+    monitoring.trackError(
+      error instanceof Error ? error : new Error('Error in generateSermonOutline')
+    )
+    Sentry.captureException(error)
 
     // Handle AbortError (timeout)
     if (error instanceof DOMException && error.name === 'AbortError') {
+      monitoring.log('error', 'Request timed out after 60 seconds', { options })
       throw new Error(
         'Request timed out after 60 seconds. Please try again with a simpler request.'
       )
     }
+
+    // Track AI performance failure
+    monitoring.trackAiPerformance(
+      'sermon-outline',
+      JSON.stringify(options).substring(0, 100),
+      startTime,
+      false
+    )
 
     // Throw with better error message
     throw new Error(error instanceof Error ? error.message : 'Failed to generate sermon outline')
   }
 }
 
-export async function enhanceSermonContent(options: EnhanceOptions): Promise<any> {
+export async function enhanceSermonContent(
+  options: EnhanceOptions
+): Promise<Record<string, unknown>> {
   try {
     // Kirim permintaan ke API route
     const response = await fetch('/api/sermon-enhance', {
