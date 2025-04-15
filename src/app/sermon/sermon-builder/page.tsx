@@ -5,6 +5,7 @@ import jsPDF from 'jspdf'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
+import { Loader2 } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -40,6 +41,7 @@ export default function SermonBuilderPage() {
   const [includeApplicationPoints, setIncludeApplicationPoints] = useState(true)
 
   const [isGenerating, setIsGenerating] = useState(false)
+  const [generationProgress, setGenerationProgress] = useState('')
   const [generatedOutline, setGeneratedOutline] = useState<SermonOutline | null>(null)
   const [error, setError] = useState('')
   const [savedOutlines, setSavedOutlines] = useState<SermonOutline[]>([])
@@ -73,9 +75,54 @@ export default function SermonBuilderPage() {
       }
 
       console.log('Generating sermon outline with options:', options)
-      const outline = await generateSermonOutline(options)
-      console.log('Sermon outline generated successfully')
-      setGeneratedOutline(outline)
+
+      // Set up progress updates
+      setGenerationProgress('Menghubungi AI service...')
+
+      // Subscribe to progress updates
+      const progressInterval = setInterval(() => {
+        setGenerationProgress(prev => {
+          const dots = prev.endsWith('...')
+            ? ''
+            : prev.endsWith('..')
+              ? '...'
+              : prev.endsWith('.')
+                ? '..'
+                : '.'
+
+          if (prev.includes('Menghubungi AI service')) {
+            return `Menghubungi AI service${dots}`
+          } else if (prev.includes('Membuat outline')) {
+            return `Membuat outline${dots}`
+          } else if (prev.includes('Menyusun poin-poin')) {
+            return `Menyusun poin-poin${dots}`
+          } else if (prev.includes('Menyelesaikan')) {
+            return `Menyelesaikan outline${dots}`
+          } else {
+            // Rotate through different messages to show progress
+            const messages = [
+              'Menghubungi AI service',
+              'Membuat outline',
+              'Menyusun poin-poin',
+              'Menyelesaikan outline'
+            ]
+            const currentIndex = Math.floor(Math.random() * messages.length)
+            return `${messages[currentIndex]}${dots}`
+          }
+        })
+      }, 500)
+
+      try {
+        const outline = await generateSermonOutline(options)
+        clearInterval(progressInterval)
+        setGenerationProgress('')
+        console.log('Sermon outline generated successfully')
+        setGeneratedOutline(outline)
+      } catch (error) {
+        clearInterval(progressInterval)
+        setGenerationProgress('')
+        throw error // Re-throw to be caught by the outer catch block
+      }
     } catch (error) {
       console.error('Error generating sermon outline:', error)
 
@@ -830,13 +877,29 @@ export default function SermonBuilderPage() {
                 </Label>
               </div>
 
-              <Button
-                onClick={handleGenerate}
-                disabled={isGenerating || (!topic && !scripture)}
-                className="w-full"
-              >
-                {isGenerating ? 'Generating...' : 'Generate Outline'}
-              </Button>
+              <div className="space-y-2 w-full">
+                <Button
+                  onClick={handleGenerate}
+                  disabled={isGenerating || (!topic && !scripture)}
+                  className="w-full"
+                >
+                  {isGenerating ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Generating...
+                    </>
+                  ) : (
+                    'Generate Outline'
+                  )}
+                </Button>
+
+                {/* Progress indicator */}
+                {generationProgress && (
+                  <div className="text-sm text-center text-muted-foreground animate-pulse">
+                    {generationProgress}
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
 

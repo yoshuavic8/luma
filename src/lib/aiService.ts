@@ -46,7 +46,7 @@ export async function generateSermonOutline(
     // Menggunakan API route yang sudah ada untuk Mistral API
     // Removed console statement
 
-    // Kirim permintaan ke API route
+    // Kirim permintaan ke API route dengan streaming
     const response = await fetch('/api/sermon-outline', {
       method: 'POST',
       headers: {
@@ -58,68 +58,188 @@ export async function generateSermonOutline(
       })
     })
 
+    // Handle streaming response
+    if (response.body) {
+      console.log('Receiving streaming response...')
+
+      // Buat outline kosong untuk diisi secara bertahap
+      const outline: SermonOutline = {
+        title: 'Loading...',
+        scripture: options.scripture || '',
+        introduction: '',
+        mainPoints: [],
+        conclusion: '',
+        applicationPoints: []
+      }
+
+      // Baca stream
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let accumulatedData = ''
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          // Decode chunk
+          const chunk = decoder.decode(value, { stream: true })
+          accumulatedData += chunk
+
+          // Proses setiap baris
+          const lines = accumulatedData.split('\n')
+          accumulatedData = lines.pop() || ''
+
+          for (const line of lines) {
+            if (line.trim()) {
+              try {
+                const data = JSON.parse(line)
+
+                // Update outline dengan data yang diterima
+                if (data.title) outline.title = data.title
+                if (data.scripture) outline.scripture = data.scripture
+                if (data.introduction) outline.introduction = data.introduction
+                if (data.conclusion) outline.conclusion = data.conclusion
+                if (data.hook) outline.hook = data.hook
+
+                // Update main points
+                if (data.mainPoints && Array.isArray(data.mainPoints)) {
+                  outline.mainPoints = data.mainPoints
+                }
+
+                // Update application points
+                if (data.applicationPoints && Array.isArray(data.applicationPoints)) {
+                  outline.applicationPoints = data.applicationPoints
+                }
+
+                // Update biblical solution
+                if (data.biblicalSolution) {
+                  outline.biblicalSolution = data.biblicalSolution
+                }
+
+                // Update personal challenge
+                if (data.personalChallenge) {
+                  outline.personalChallenge = data.personalChallenge
+                }
+              } catch (e) {
+                console.error('Error parsing JSON chunk:', e)
+              }
+            }
+          }
+        }
+
+        // Proses data yang tersisa
+        if (accumulatedData.trim()) {
+          try {
+            const data = JSON.parse(accumulatedData)
+            // Update final data
+            if (data.title) outline.title = data.title
+            if (data.scripture) outline.scripture = data.scripture
+            if (data.introduction) outline.introduction = data.introduction
+            if (data.conclusion) outline.conclusion = data.conclusion
+            if (data.hook) outline.hook = data.hook
+
+            if (data.mainPoints && Array.isArray(data.mainPoints)) {
+              outline.mainPoints = data.mainPoints
+            }
+
+            if (data.applicationPoints && Array.isArray(data.applicationPoints)) {
+              outline.applicationPoints = data.applicationPoints
+            }
+
+            if (data.biblicalSolution) {
+              outline.biblicalSolution = data.biblicalSolution
+            }
+
+            if (data.personalChallenge) {
+              outline.personalChallenge = data.personalChallenge
+            }
+          } catch (e) {
+            console.error('Error parsing final JSON chunk:', e)
+          }
+        }
+
+        return outline
+      } catch (streamError) {
+        console.error('Error reading stream:', streamError)
+        throw new Error(
+          'Error reading stream: ' +
+            (streamError instanceof Error ? streamError.message : String(streamError))
+        )
+      }
+    }
+
+    // Jika tidak ada response.body (tidak streaming), handle respons normal
     if (!response.ok) {
       const errorData = await response.json()
       // Removed console statement
       throw new Error(errorData.error || `API error: ${response.status}`)
     }
 
-    const data = await response.json()
-    // Removed console statement
+    // Jika tidak ada streaming response, coba parse respons normal
+    try {
+      const data = await response.json()
+      // Removed console statement
 
-    // Validasi data terlebih dahulu
-    if (!data || typeof data !== 'object') {
-      console.error('Invalid API response format:', data)
-      throw new Error('Invalid API response format')
+      // Validasi data terlebih dahulu
+      if (!data || typeof data !== 'object') {
+        console.error('Invalid API response format:', data)
+        throw new Error('Invalid API response format')
+      }
+
+      // Log untuk debugging
+      console.log('API response received:', JSON.stringify(data).substring(0, 200) + '...')
+
+      // Konversi format respons API ke format SermonOutline dengan validasi yang lebih ketat
+      const outline: SermonOutline = {
+        title: data.title || 'Untitled Sermon',
+        scripture: data.scripture || 'No scripture provided',
+        hook: data.hook || '',
+        introduction: data.introduction || '',
+        mainPoints: Array.isArray(data.mainPoints)
+          ? data.mainPoints.map((point: any) => ({
+              title: point?.title || 'Untitled Point',
+              scripture: point?.scripture || '',
+              explanation: point?.explanation || ''
+            }))
+          : [{ title: 'Main Point', scripture: '', explanation: '' }],
+        conclusion: data.conclusion || '',
+        applicationPoints: data.applicationPoints
+          ? Array.isArray(data.applicationPoints)
+            ? // Handle array of strings
+              typeof data.applicationPoints[0] === 'string'
+              ? data.applicationPoints
+              : // Handle array of objects with 'point' property
+                data.applicationPoints.map((p: any) =>
+                  p && typeof p === 'object' ? p.point || p.toString() : 'Application point'
+                )
+            : []
+          : [],
+        // Tambahkan biblicalSolution jika ada
+        ...(data.biblicalSolution &&
+          typeof data.biblicalSolution === 'object' && {
+            biblicalSolution: {
+              explanation: data.biblicalSolution.explanation || '',
+              illustration: data.biblicalSolution.illustration || ''
+            }
+          }),
+        // Tambahkan personalChallenge jika ada
+        ...(data.personalChallenge &&
+          typeof data.personalChallenge === 'object' && {
+            personalChallenge: {
+              challenge: data.personalChallenge.challenge || '',
+              illustration: data.personalChallenge.illustration || ''
+            }
+          })
+      }
+      return outline
+    } catch (parseError) {
+      console.error('Error parsing non-streaming response:', parseError)
+      throw new Error(
+        'Failed to parse response: ' +
+          (parseError instanceof Error ? parseError.message : String(parseError))
+      )
     }
-
-    // Log untuk debugging
-    console.log('API response received:', JSON.stringify(data).substring(0, 200) + '...')
-
-    // Konversi format respons API ke format SermonOutline dengan validasi yang lebih ketat
-    const outline: SermonOutline = {
-      title: data.title || 'Untitled Sermon',
-      scripture: data.scripture || 'No scripture provided',
-      hook: data.hook || '',
-      introduction: data.introduction || '',
-      mainPoints: Array.isArray(data.mainPoints)
-        ? data.mainPoints.map((point: any) => ({
-            title: point?.title || 'Untitled Point',
-            scripture: point?.scripture || '',
-            explanation: point?.explanation || ''
-          }))
-        : [{ title: 'Main Point', scripture: '', explanation: '' }],
-      conclusion: data.conclusion || '',
-      applicationPoints: data.applicationPoints
-        ? Array.isArray(data.applicationPoints)
-          ? // Handle array of strings
-            typeof data.applicationPoints[0] === 'string'
-            ? data.applicationPoints
-            : // Handle array of objects with 'point' property
-              data.applicationPoints.map((p: any) =>
-                p && typeof p === 'object' ? p.point || p.toString() : 'Application point'
-              )
-          : []
-        : [],
-      // Tambahkan biblicalSolution jika ada
-      ...(data.biblicalSolution &&
-        typeof data.biblicalSolution === 'object' && {
-          biblicalSolution: {
-            explanation: data.biblicalSolution.explanation || '',
-            illustration: data.biblicalSolution.illustration || ''
-          }
-        }),
-      // Tambahkan personalChallenge jika ada
-      ...(data.personalChallenge &&
-        typeof data.personalChallenge === 'object' && {
-          personalChallenge: {
-            challenge: data.personalChallenge.challenge || '',
-            illustration: data.personalChallenge.illustration || ''
-          }
-        })
-    }
-
-    return outline
   } catch (error) {
     // Removed console statement
     throw new Error(error instanceof Error ? error.message : 'Failed to generate sermon outline')

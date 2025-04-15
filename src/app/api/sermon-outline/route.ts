@@ -1,5 +1,120 @@
 import { NextResponse } from 'next/server'
 
+// Fungsi untuk streaming response dari Mistral AI
+function streamMistralResponse(response: Response) {
+  const reader = response.body!.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let jsonBuffer = {}
+
+  return new ReadableStream({
+    async start(controller) {
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          // Decode chunk dan tambahkan ke buffer
+          const chunk = decoder.decode(value, { stream: true })
+          buffer += chunk
+
+          // Proses setiap baris dalam buffer
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || '' // Simpan baris terakhir yang mungkin belum lengkap
+
+          for (const line of lines) {
+            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+              try {
+                const data = JSON.parse(line.substring(6))
+                if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
+                  const content = data.choices[0].delta.content
+
+                  // Coba parse sebagai JSON jika content berisi karakter JSON
+                  if (content.includes('{') || content.includes('}')) {
+                    try {
+                      // Update jsonBuffer dengan content baru
+                      if (!jsonBuffer.hasOwnProperty('content')) {
+                        jsonBuffer = { content: '' }
+                      }
+                      jsonBuffer.content += content
+
+                      // Coba parse jsonBuffer.content sebagai JSON
+                      if (
+                        jsonBuffer.content.trim().startsWith('{') &&
+                        jsonBuffer.content.trim().endsWith('}')
+                      ) {
+                        try {
+                          const parsedJson = JSON.parse(jsonBuffer.content)
+                          // Jika berhasil di-parse, kirim ke client
+                          controller.enqueue(
+                            new TextEncoder().encode(JSON.stringify(parsedJson) + '\n')
+                          )
+                          jsonBuffer = {} // Reset buffer
+                        } catch (e) {
+                          // JSON belum lengkap, lanjutkan buffering
+                        }
+                      }
+                    } catch (e) {
+                      // Bukan JSON valid, kirim sebagai teks biasa
+                      controller.enqueue(
+                        new TextEncoder().encode(JSON.stringify({ text: content }) + '\n')
+                      )
+                    }
+                  } else {
+                    // Bukan JSON, kirim sebagai teks biasa
+                    controller.enqueue(
+                      new TextEncoder().encode(JSON.stringify({ text: content }) + '\n')
+                    )
+                  }
+                }
+              } catch (e) {
+                console.error('Error parsing stream data:', e)
+              }
+            } else if (line === 'data: [DONE]') {
+              // Stream selesai, kirim data terakhir jika ada
+              if (jsonBuffer.hasOwnProperty('content') && jsonBuffer.content.trim()) {
+                try {
+                  // Coba parse sebagai JSON
+                  const parsedJson = JSON.parse(jsonBuffer.content)
+                  controller.enqueue(new TextEncoder().encode(JSON.stringify(parsedJson) + '\n'))
+                } catch (e) {
+                  // Bukan JSON valid, kirim sebagai teks biasa
+                  controller.enqueue(
+                    new TextEncoder().encode(JSON.stringify({ text: jsonBuffer.content }) + '\n')
+                  )
+                }
+              }
+            }
+          }
+        }
+
+        // Proses buffer yang tersisa
+        if (buffer.trim()) {
+          if (buffer.startsWith('data: ') && buffer !== 'data: [DONE]') {
+            try {
+              const data = JSON.parse(buffer.substring(6))
+              if (data.choices && data.choices[0].delta && data.choices[0].delta.content) {
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    JSON.stringify({ text: data.choices[0].delta.content }) + '\n'
+                  )
+                )
+              }
+            } catch (e) {
+              console.error('Error parsing final buffer:', e)
+            }
+          }
+        }
+
+        controller.close()
+      } catch (e) {
+        console.error('Stream processing error:', e)
+        controller.error(e)
+      }
+    }
+  })
+}
+
 export async function POST(request: Request) {
   try {
     const { options, userData } = await request.json()
@@ -111,7 +226,7 @@ export async function POST(request: Request) {
 
       console.log('Sending request to Mistral API...')
 
-      // Gunakan model yang lebih kecil dan lebih cepat
+      // Gunakan streaming response untuk menghindari timeout
       const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -133,16 +248,11 @@ export async function POST(request: Request) {
           ],
           temperature: 0.5, // Mengurangi temperature untuk respons yang lebih deterministik
           max_tokens: 1500, // Mengurangi max_tokens untuk mengurangi waktu respons
-          response_format: { type: 'json_object' }
+          response_format: { type: 'json_object' },
+          stream: true // Aktifkan streaming untuk menghindari timeout
         }),
         signal: controller.signal
       })
-
-      // Clear timeout jika request berhasil
-      clearTimeout(timeoutId)
-
-      // Log respons status untuk debugging
-      console.log(`Mistral API response status: ${response.status}`)
 
       // Jika respons tidak OK, tangani error
       if (!response.ok) {
@@ -153,115 +263,18 @@ export async function POST(request: Request) {
         )
       }
 
-      const completion = await response.json()
-      console.log('Received response from Mistral API')
-
-      // Validasi respons dengan lebih ketat
-      if (
-        !completion ||
-        typeof completion !== 'object' ||
-        !completion.choices ||
-        !Array.isArray(completion.choices) ||
-        completion.choices.length === 0 ||
-        !completion.choices[0] ||
-        !completion.choices[0].message ||
-        !completion.choices[0].message.content ||
-        typeof completion.choices[0].message.content !== 'string'
-      ) {
-        console.error('Invalid API response format:', completion)
-        return NextResponse.json(
-          {
-            error: 'Invalid API response format',
-            details: JSON.stringify(completion)
-          },
-          { status: 500 }
-        )
-      }
-
-      let outlineText = completion.choices[0].message.content
-      console.log('Content length:', outlineText.length)
-      console.log('Content preview:', outlineText.substring(0, 100) + '...')
-
-      // Bersihkan respons dari backticks dan penanda json jika ada
-      if (outlineText.startsWith('```')) {
-        // Hapus penanda awal (```json atau ```)
-        outlineText = outlineText.replace(/^```(json)?\n/, '')
-        // Hapus penanda akhir (```)
-        outlineText = outlineText.replace(/\n```$/, '')
-      }
-
-      try {
-        // Validasi bahwa teks adalah JSON yang valid
-        if (!outlineText.trim().startsWith('{') || !outlineText.trim().endsWith('}')) {
-          console.error('Response is not valid JSON:', outlineText.substring(0, 100) + '...')
-          throw new Error('Response is not valid JSON')
+      // Streaming response ke client
+      const stream = streamMistralResponse(response)
+      return new Response(stream, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive'
         }
+      })
 
-        const outline = JSON.parse(outlineText)
-        console.log('Successfully parsed JSON response')
-
-        // Validasi struktur outline
-        if (
-          !outline.title ||
-          !outline.scripture ||
-          !outline.introduction ||
-          !Array.isArray(outline.mainPoints)
-        ) {
-          console.error('Missing required fields in outline:', Object.keys(outline))
-          throw new Error('Missing required fields in outline')
-        }
-
-        return NextResponse.json(outline)
-      } catch (parseError) {
-        console.error('Error parsing JSON:', parseError)
-
-        // Coba lagi dengan pendekatan lain jika masih gagal
-        try {
-          // Coba hapus semua karakter non-JSON yang mungkin ada
-          const cleanedText = outlineText.replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
-          // Tambahkan validasi tambahan
-          if (!cleanedText.trim().startsWith('{') || !cleanedText.trim().endsWith('}')) {
-            throw new Error('Cleaned text is still not valid JSON')
-          }
-
-          const outline = JSON.parse(cleanedText)
-          console.log('Successfully parsed JSON after cleaning')
-          return NextResponse.json(outline)
-        } catch (cleanError) {
-          console.error('Failed to parse even after cleaning:', cleanError)
-
-          // Jika masih gagal, coba buat outline minimal
-          try {
-            // Buat outline minimal sebagai fallback
-            const fallbackOutline = {
-              title: 'Outline Khotbah',
-              scripture: options.scripture || 'Ayat tidak tersedia',
-              introduction:
-                'Maaf, terjadi kesalahan dalam pembuatan outline. Ini adalah outline minimal.',
-              mainPoints: [
-                {
-                  title: 'Poin 1',
-                  scripture: '',
-                  explanation: 'Silakan isi dengan konten Anda sendiri.'
-                }
-              ],
-              conclusion: 'Kesimpulan akan ditambahkan di sini.',
-              applicationPoints: ['Aplikasi akan ditambahkan di sini.']
-            }
-
-            return NextResponse.json(fallbackOutline, { status: 200 })
-          } catch {
-            // Jika semua upaya gagal, kembalikan error
-            return NextResponse.json(
-              {
-                error: 'Failed to parse AI response',
-                rawResponse: outlineText.substring(0, 500)
-              },
-              { status: 500 }
-            )
-          }
-        }
-      }
+      // Clear timeout jika request berhasil
+      clearTimeout(timeoutId)
     } catch (error: unknown) {
       console.error('Error in sermon-outline API route:', error)
 
