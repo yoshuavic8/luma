@@ -1,0 +1,12 @@
+[
+  {
+    "origin": [
+      "http://localhost:3000", 
+      "https://lumaapp-fcc95.web.app", 
+      "https://lumaapp-fcc95.firebaseapp.com",
+      "http://192.168.18.216:3000"
+    ],
+    "method": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "maxAgeSeconds": 3600
+  }
+]

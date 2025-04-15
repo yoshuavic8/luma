@@ -1,0 +1,59 @@
+{
+  "name": "Luma - AI Platform for Church Leaders",
+  "short_name": "Luma",
+  "description": "AI-powered platform for sermon preparation, Bible study, and ministry resources",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/assets/images/logo/AppIcons/favicon/favicon-96x96.png",
+      "sizes": "96x96",
+      "type": "image/png"
+    },
+    {
+      "src": "/assets/images/logo/AppIcons/pwa/maskable-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/assets/images/logo/AppIcons/pwa/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Sermon Builder",
+      "short_name": "Sermon",
+      "description": "Create a new sermon",
+      "url": "/sermon/sermon-builder",
+      "icons": [
+        {
+          "src": "/assets/images/logo/AppIcons/favicon/favicon-96x96.png",
+          "sizes": "96x96"
+        }
+      ]
+    },
+    {
+      "name": "Sermon Notes",
+      "short_name": "Notes",
+      "description": "View your sermon notes",
+      "url": "/sermon/sermon-notes",
+      "icons": [
+        {
+          "src": "/assets/images/logo/AppIcons/favicon/favicon-96x96.png",
+          "sizes": "96x96"
+        }
+      ]
+    }
+  ],
+
+  "related_applications": [],
+  "prefer_related_applications": false,
+  "categories": ["productivity", "utilities", "education", "religion"]
+}

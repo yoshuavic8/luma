@@ -1,0 +1,21 @@
+{
+  "extends": ["next/core-web-vitals"],
+  "rules": {
+    // Matikan aturan yang sering menyebabkan error di Next.js
+    "react/no-unescaped-entities": "off",
+    "react/display-name": "off",
+    "@next/next/no-img-element": "off",
+    "react/no-unknown-property": "off",
+    "react-hooks/exhaustive-deps": "warn",
+    // Aturan untuk variabel yang tidak digunakan
+    "no-unused-vars": ["warn", { 
+      "vars": "all", 
+      "args": "after-used", 
+      "ignoreRestSiblings": true,
+      "argsIgnorePattern": "^_",
+      "varsIgnorePattern": "^_"
+    }],
+    // Aturan untuk import yang tidak digunakan
+    "import/no-unused-modules": "off"
+  }
+}
