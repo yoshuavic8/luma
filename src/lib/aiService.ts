@@ -46,7 +46,10 @@ export async function generateSermonOutline(
     // Menggunakan API route yang sudah ada untuk Mistral API
     // Removed console statement
 
-    // Kirim permintaan ke API route
+    // Kirim permintaan ke API route dengan timeout
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 60000) // 60 detik timeout
+
     const response = await fetch('/api/sermon-outline', {
       method: 'POST',
       headers: {
@@ -55,8 +58,12 @@ export async function generateSermonOutline(
       body: JSON.stringify({
         options,
         userData: { uid: 'client-side' } // Minimal userData untuk API route
-      })
+      }),
+      signal: controller.signal
     })
+
+    // Clear timeout jika request berhasil
+    clearTimeout(timeoutId)
 
     if (!response.ok) {
       const errorData = await response.json()
@@ -121,7 +128,16 @@ export async function generateSermonOutline(
 
     return outline
   } catch (error) {
-    // Removed console statement
+    console.error('Error in generateSermonOutline:', error)
+
+    // Handle AbortError (timeout)
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error(
+        'Request timed out after 60 seconds. Please try again with a simpler request.'
+      )
+    }
+
+    // Throw with better error message
     throw new Error(error instanceof Error ? error.message : 'Failed to generate sermon outline')
   }
 }

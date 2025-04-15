@@ -111,6 +111,7 @@ export async function POST(request: Request) {
 
       console.log('Sending request to Mistral API...')
 
+      // Gunakan model yang lebih kecil dan lebih cepat
       const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -118,20 +119,20 @@ export async function POST(request: Request) {
           Authorization: `Bearer ${apiKey.trim()}`
         },
         body: JSON.stringify({
-          model: 'mistral-large-latest',
+          model: 'mistral-small-latest', // Menggunakan model yang lebih kecil untuk respons lebih cepat
           messages: [
             {
               role: 'system',
               content:
-                'You are a helpful assistant that generates sermon outlines for pastors and church leaders. Please provide your response in Indonesian language (Bahasa Indonesia).'
+                'You are a helpful assistant that generates sermon outlines for pastors and church leaders. Please provide your response in Indonesian language (Bahasa Indonesia). Keep your response concise and focused.'
             },
             {
               role: 'user',
               content: prompt
             }
           ],
-          temperature: 0.7,
-          max_tokens: 2000, // Mengurangi max_tokens untuk mengurangi waktu respons
+          temperature: 0.5, // Mengurangi temperature untuk respons yang lebih deterministik
+          max_tokens: 1500, // Mengurangi max_tokens untuk mengurangi waktu respons
           response_format: { type: 'json_object' }
         }),
         signal: controller.signal
@@ -140,6 +141,10 @@ export async function POST(request: Request) {
       // Clear timeout jika request berhasil
       clearTimeout(timeoutId)
 
+      // Log respons status untuk debugging
+      console.log(`Mistral API response status: ${response.status}`)
+
+      // Jika respons tidak OK, tangani error
       if (!response.ok) {
         const errorText = await response.text().catch(() => 'No error details')
         console.error(`Mistral API error (${response.status}):`, errorText)
@@ -149,21 +154,33 @@ export async function POST(request: Request) {
       }
 
       const completion = await response.json()
+      console.log('Received response from Mistral API')
 
-      // Removed console statement
-
+      // Validasi respons dengan lebih ketat
       if (
+        !completion ||
+        typeof completion !== 'object' ||
         !completion.choices ||
+        !Array.isArray(completion.choices) ||
+        completion.choices.length === 0 ||
         !completion.choices[0] ||
         !completion.choices[0].message ||
-        !completion.choices[0].message.content
+        !completion.choices[0].message.content ||
+        typeof completion.choices[0].message.content !== 'string'
       ) {
-        // Error: Unexpected API response format
-        return NextResponse.json({ error: 'Invalid API response format' }, { status: 500 })
+        console.error('Invalid API response format:', completion)
+        return NextResponse.json(
+          {
+            error: 'Invalid API response format',
+            details: JSON.stringify(completion)
+          },
+          { status: 500 }
+        )
       }
 
       let outlineText = completion.choices[0].message.content
-      // Removed console statement
+      console.log('Content length:', outlineText.length)
+      console.log('Content preview:', outlineText.substring(0, 100) + '...')
 
       // Bersihkan respons dari backticks dan penanda json jika ada
       if (outlineText.startsWith('```')) {
@@ -174,30 +191,75 @@ export async function POST(request: Request) {
       }
 
       try {
+        // Validasi bahwa teks adalah JSON yang valid
+        if (!outlineText.trim().startsWith('{') || !outlineText.trim().endsWith('}')) {
+          console.error('Response is not valid JSON:', outlineText.substring(0, 100) + '...')
+          throw new Error('Response is not valid JSON')
+        }
+
         const outline = JSON.parse(outlineText)
-        // Removed console statement
+        console.log('Successfully parsed JSON response')
+
+        // Validasi struktur outline
+        if (
+          !outline.title ||
+          !outline.scripture ||
+          !outline.introduction ||
+          !Array.isArray(outline.mainPoints)
+        ) {
+          console.error('Missing required fields in outline:', Object.keys(outline))
+          throw new Error('Missing required fields in outline')
+        }
+
         return NextResponse.json(outline)
-      } catch {
-        // Removed console statement
-        // Removed console statement
+      } catch (parseError) {
+        console.error('Error parsing JSON:', parseError)
 
         // Coba lagi dengan pendekatan lain jika masih gagal
         try {
           // Coba hapus semua karakter non-JSON yang mungkin ada
           const cleanedText = outlineText.replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
-          const outline = JSON.parse(cleanedText)
-          // Removed console statement
-          return NextResponse.json(outline)
-        } catch {
-          // Removed console statement
+          // Tambahkan validasi tambahan
+          if (!cleanedText.trim().startsWith('{') || !cleanedText.trim().endsWith('}')) {
+            throw new Error('Cleaned text is still not valid JSON')
+          }
 
-          return NextResponse.json(
-            {
-              error: 'Failed to parse AI response',
-              rawResponse: outlineText
-            },
-            { status: 500 }
-          )
+          const outline = JSON.parse(cleanedText)
+          console.log('Successfully parsed JSON after cleaning')
+          return NextResponse.json(outline)
+        } catch (cleanError) {
+          console.error('Failed to parse even after cleaning:', cleanError)
+
+          // Jika masih gagal, coba buat outline minimal
+          try {
+            // Buat outline minimal sebagai fallback
+            const fallbackOutline = {
+              title: 'Outline Khotbah',
+              scripture: options.scripture || 'Ayat tidak tersedia',
+              introduction:
+                'Maaf, terjadi kesalahan dalam pembuatan outline. Ini adalah outline minimal.',
+              mainPoints: [
+                {
+                  title: 'Poin 1',
+                  scripture: '',
+                  explanation: 'Silakan isi dengan konten Anda sendiri.'
+                }
+              ],
+              conclusion: 'Kesimpulan akan ditambahkan di sini.',
+              applicationPoints: ['Aplikasi akan ditambahkan di sini.']
+            }
+
+            return NextResponse.json(fallbackOutline, { status: 200 })
+          } catch {
+            // Jika semua upaya gagal, kembalikan error
+            return NextResponse.json(
+              {
+                error: 'Failed to parse AI response',
+                rawResponse: outlineText.substring(0, 500)
+              },
+              { status: 500 }
+            )
+          }
         }
       }
     } catch (error: unknown) {
