@@ -1,26 +1,20 @@
-import { NextResponse } from "next/server";
+import { NextResponse } from 'next/server'
 
 export async function POST(request: Request) {
   try {
-    const { options, userData } = await request.json();
+    const { options, userData } = await request.json()
 
     // Validasi pengguna - tanpa batas penggunaan
     if (!userData) {
-      return NextResponse.json(
-        { error: "User data is required" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'User data is required' }, { status: 400 })
     }
 
     // Batas penggunaan dinonaktifkan untuk sementara
 
-    const apiKey = process.env.NEXT_PUBLIC_MISTRAL_API_KEY;
+    const apiKey = process.env.NEXT_PUBLIC_MISTRAL_API_KEY
     if (!apiKey) {
       // Removed console statement
-      return NextResponse.json(
-        { error: "Mistral API key not configured" },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: 'Mistral API key not configured' }, { status: 500 })
     }
 
     // Removed console statement
@@ -29,40 +23,38 @@ export async function POST(request: Request) {
     // Removed console statement
 
     const prompt = `Buatkan outline khotbah dengan parameter berikut:
-    Topik: ${options.topic || "(Silakan pilih topik yang sesuai)"}
-    Ayat Alkitab: ${
-      options.scripture || "(Silakan pilih ayat Alkitab yang sesuai)"
-    }
+    Topik: ${options.topic || '(Silakan pilih topik yang sesuai)'}
+    Ayat Alkitab: ${options.scripture || '(Silakan pilih ayat Alkitab yang sesuai)'}
     Target Audiens: ${
-      options.audience === "general"
-        ? "Umum"
-        : options.audience === "youth"
-        ? "Pemuda"
-        : options.audience === "children"
-        ? "Anak-anak"
-        : options.audience === "seniors"
-        ? "Lansia"
-        : options.audience
+      options.audience === 'general'
+        ? 'Umum'
+        : options.audience === 'youth'
+          ? 'Pemuda'
+          : options.audience === 'children'
+            ? 'Anak-anak'
+            : options.audience === 'seniors'
+              ? 'Lansia'
+              : options.audience
     }
     Gaya: ${
-      options.style === "expository"
-        ? "Ekspositori"
-        : options.style === "topical"
-        ? "Topikal"
-        : options.style === "narrative"
-        ? "Naratif"
-        : options.style
+      options.style === 'expository'
+        ? 'Ekspositori'
+        : options.style === 'topical'
+          ? 'Topikal'
+          : options.style === 'narrative'
+            ? 'Naratif'
+            : options.style
     }
     Panjang: ${
-      options.length === "short"
-        ? "Pendek"
-        : options.length === "medium"
-        ? "Sedang"
-        : options.length === "long"
-        ? "Panjang"
-        : options.length
+      options.length === 'short'
+        ? 'Pendek'
+        : options.length === 'medium'
+          ? 'Sedang'
+          : options.length === 'long'
+            ? 'Panjang'
+            : options.length
     }
-    Sertakan Poin Aplikasi: ${options.includeApplicationPoints ? "Ya" : "Tidak"}
+    Sertakan Poin Aplikasi: ${options.includeApplicationPoints ? 'Ya' : 'Tidak'}
 
     Format respons sebagai objek JSON dengan struktur berikut:
     {
@@ -107,47 +99,56 @@ export async function POST(request: Request) {
     3. Analogi atau perumpamaan yang mudah dipahami
     4. Contoh kehidupan sehari-hari yang relatable
 
-    Buatlah ilustrasi yang singkat namun bermakna, dan pastikan ilustrasi tersebut memperkuat poin yang ingin disampaikan.`;
+    Buatlah ilustrasi yang singkat namun bermakna, dan pastikan ilustrasi tersebut memperkuat poin yang ingin disampaikan.`
 
     try {
       // Removed console statement
 
       // Menggunakan fetch API untuk memanggil Mistral API secara langsung
-      const response = await fetch(
-        "https://api.mistral.ai/v1/chat/completions",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey.trim()}`,
-          },
-          body: JSON.stringify({
-            model: "mistral-large-latest",
-            messages: [
-              {
-                role: "system",
-                content:
-                  "You are a helpful assistant that generates sermon outlines for pastors and church leaders. Please provide your response in Indonesian language (Bahasa Indonesia).",
-              },
-              {
-                role: "user",
-                content: prompt,
-              },
-            ],
-            temperature: 0.7,
-            max_tokens: 4000,
-            response_format: { type: "json_object" },
-          }),
-        }
-      );
+      // Set timeout untuk fetch request
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), 50000) // 50 detik timeout
+
+      console.log('Sending request to Mistral API...')
+
+      const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey.trim()}`
+        },
+        body: JSON.stringify({
+          model: 'mistral-large-latest',
+          messages: [
+            {
+              role: 'system',
+              content:
+                'You are a helpful assistant that generates sermon outlines for pastors and church leaders. Please provide your response in Indonesian language (Bahasa Indonesia).'
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          temperature: 0.7,
+          max_tokens: 2000, // Mengurangi max_tokens untuk mengurangi waktu respons
+          response_format: { type: 'json_object' }
+        }),
+        signal: controller.signal
+      })
+
+      // Clear timeout jika request berhasil
+      clearTimeout(timeoutId)
 
       if (!response.ok) {
+        const errorText = await response.text().catch(() => 'No error details')
+        console.error(`Mistral API error (${response.status}):`, errorText)
         throw new Error(
-          `Mistral API responded with status: ${response.status}`
-        );
+          `Mistral API responded with status: ${response.status}. Details: ${errorText.substring(0, 200)}`
+        )
       }
 
-      const completion = await response.json();
+      const completion = await response.json()
 
       // Removed console statement
 
@@ -158,27 +159,24 @@ export async function POST(request: Request) {
         !completion.choices[0].message.content
       ) {
         // Error: Unexpected API response format
-        return NextResponse.json(
-          { error: "Invalid API response format" },
-          { status: 500 }
-        );
+        return NextResponse.json({ error: 'Invalid API response format' }, { status: 500 })
       }
 
-      let outlineText = completion.choices[0].message.content;
+      let outlineText = completion.choices[0].message.content
       // Removed console statement
 
       // Bersihkan respons dari backticks dan penanda json jika ada
-      if (outlineText.startsWith("```")) {
+      if (outlineText.startsWith('```')) {
         // Hapus penanda awal (```json atau ```)
-        outlineText = outlineText.replace(/^```(json)?\n/, "");
+        outlineText = outlineText.replace(/^```(json)?\n/, '')
         // Hapus penanda akhir (```)
-        outlineText = outlineText.replace(/\n```$/, "");
+        outlineText = outlineText.replace(/\n```$/, '')
       }
 
       try {
-        const outline = JSON.parse(outlineText);
+        const outline = JSON.parse(outlineText)
         // Removed console statement
-        return NextResponse.json(outline);
+        return NextResponse.json(outline)
       } catch {
         // Removed console statement
         // Removed console statement
@@ -186,50 +184,58 @@ export async function POST(request: Request) {
         // Coba lagi dengan pendekatan lain jika masih gagal
         try {
           // Coba hapus semua karakter non-JSON yang mungkin ada
-          const cleanedText = outlineText.replace(
-            /[\u0000-\u001F\u007F-\u009F]/g,
-            ""
-          );
-          const outline = JSON.parse(cleanedText);
+          const cleanedText = outlineText.replace(/[\u0000-\u001F\u007F-\u009F]/g, '')
+          const outline = JSON.parse(cleanedText)
           // Removed console statement
-          return NextResponse.json(outline);
+          return NextResponse.json(outline)
         } catch {
           // Removed console statement
 
           return NextResponse.json(
             {
-              error: "Failed to parse AI response",
-              rawResponse: outlineText,
+              error: 'Failed to parse AI response',
+              rawResponse: outlineText
             },
             { status: 500 }
-          );
+          )
         }
       }
     } catch (error: unknown) {
-      // Removed console statement
+      console.error('Error in sermon-outline API route:', error)
+
+      // Handle AbortError (timeout)
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return NextResponse.json(
+          {
+            error: 'Request to Mistral API timed out after 50 seconds',
+            details:
+              'The AI service took too long to respond. Please try again with a simpler request.'
+          },
+          { status: 504 }
+        )
+      }
 
       // Cek apakah ada pesan error yang lebih spesifik
-      const errorMessage =
-        error instanceof Error ? error.message : "Unknown error";
-      const statusCode = 500;
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      const statusCode = error instanceof Error && error.message.includes('status: 429') ? 429 : 500
 
       return NextResponse.json(
         {
           error: `Error connecting to Mistral API: ${errorMessage}`,
-          details: String(error),
+          details: String(error)
         },
         { status: statusCode }
-      );
+      )
     }
   } catch (error: unknown) {
     // Removed console statement
     return NextResponse.json(
       {
         error: `Failed to generate sermon outline: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`,
+          error instanceof Error ? error.message : 'Unknown error'
+        }`
       },
       { status: 500 }
-    );
+    )
   }
 }
